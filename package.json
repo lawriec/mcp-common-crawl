@@ -1,0 +1,22 @@
+{
+  "name": "mcp-common-crawl",
+  "version": "1.0.0",
+  "description": "MCP server for searching and extracting content from Common Crawl web archives",
+  "type": "module",
+  "main": "build/index.js",
+  "bin": {
+    "mcp-common-crawl": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "start": "node build/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5.3.3"
+  }
+}
