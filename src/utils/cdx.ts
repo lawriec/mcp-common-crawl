@@ -71,20 +71,17 @@ export async function queryCdx(params: CdxSearchParams): Promise<CdxRecord[]> {
   const text = await res.text();
   if (!text.trim()) return [];
 
-  // CDX JSON output: first line is header array, subsequent lines are value arrays
+  // CDX JSON output: each line is a complete JSON object (JSONL format)
   const lines = text.trim().split("\n");
-  if (lines.length < 2) return [];
-
-  const headers = JSON.parse(lines[0]) as string[];
   const records: CdxRecord[] = [];
 
-  for (let i = 1; i < lines.length; i++) {
-    const values = JSON.parse(lines[i]) as string[];
-    const record: Record<string, string> = {};
-    for (let j = 0; j < headers.length; j++) {
-      record[headers[j]] = values[j] ?? "";
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      records.push(JSON.parse(line) as CdxRecord);
+    } catch {
+      // Skip malformed lines
     }
-    records.push(record as unknown as CdxRecord);
   }
 
   return records;

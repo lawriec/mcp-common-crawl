@@ -55,41 +55,73 @@ export async function fetchWarcRecord(
 }
 
 /**
- * Parse a decompressed WARC record into its components.
+ * Parse a decompressed record into its components.
+ * Handles both WARC format (newer crawls) and ARC format (2008-2012 era crawls).
  *
- * Structure:
+ * WARC structure:
  *   WARC/1.0 header block (ends with \r\n\r\n)
  *   HTTP response header block (ends with \r\n\r\n)
  *   HTTP response body
+ *
+ * ARC structure:
+ *   Single metadata line: url ip timestamp mime length\n
+ *   HTTP response header block (ends with \n\n)
+ *   HTTP response body
  */
 function parseWarcRecord(raw: string): WarcResult {
-  // Split WARC header from the rest
-  const warcHeaderEnd = raw.indexOf("\r\n\r\n");
-  if (warcHeaderEnd === -1) {
-    throw new Error("Invalid WARC record: no header boundary found");
+  const isWarc = raw.startsWith("WARC/");
+
+  let afterArchiveHeader: string;
+  if (isWarc) {
+    // WARC: header block ends with \r\n\r\n
+    const warcHeaderEnd = raw.indexOf("\r\n\r\n");
+    if (warcHeaderEnd === -1) {
+      throw new Error("Invalid WARC record: no header boundary found");
+    }
+    afterArchiveHeader = raw.substring(warcHeaderEnd + 4);
+  } else {
+    // ARC: single metadata line (url ip timestamp mime length) ending with \n
+    // The HTTP response follows on the next line
+    const firstNewline = raw.indexOf("\n");
+    if (firstNewline === -1) {
+      throw new Error("Invalid ARC record: no newline found");
+    }
+    afterArchiveHeader = raw.substring(firstNewline + 1);
   }
 
-  const afterWarcHeader = raw.substring(warcHeaderEnd + 4);
-
-  // Split HTTP header from body
-  const httpHeaderEnd = afterWarcHeader.indexOf("\r\n\r\n");
+  // The HTTP response always uses \r\n line endings regardless of archive format
+  const httpHeaderEnd = afterArchiveHeader.indexOf("\r\n\r\n");
   if (httpHeaderEnd === -1) {
-    // Some records may only have WARC metadata (e.g., revisit records)
-    return {
-      status: 0,
-      headers: {},
-      body: afterWarcHeader.trim(),
-      isBinary: false,
-      contentType: "",
-      bodySize: 0,
-    };
+    // Fallback: try \n\n
+    const altEnd = afterArchiveHeader.indexOf("\n\n");
+    if (altEnd === -1) {
+      return {
+        status: 0,
+        headers: {},
+        body: afterArchiveHeader.trim(),
+        isBinary: false,
+        contentType: "",
+        bodySize: 0,
+      };
+    }
+    const httpBlock = afterArchiveHeader.substring(0, altEnd);
+    const body = afterArchiveHeader.substring(altEnd + 2);
+    return parseHttpResponse(httpBlock, body, "\n");
   }
 
-  const httpHeaderBlock = afterWarcHeader.substring(0, httpHeaderEnd);
-  const body = afterWarcHeader.substring(httpHeaderEnd + 4);
+  const httpHeaderBlock = afterArchiveHeader.substring(0, httpHeaderEnd);
+  const body = afterArchiveHeader.substring(httpHeaderEnd + 4);
 
+  return parseHttpResponse(httpHeaderBlock, body, "\r\n");
+}
+
+function parseHttpResponse(
+  httpHeaderBlock: string,
+  body: string,
+  lineSep: string
+): WarcResult {
   // Parse HTTP status line and headers
-  const headerLines = httpHeaderBlock.split("\r\n");
+  const headerLines = httpHeaderBlock.split(lineSep);
   const statusLine = headerLines[0];
   const statusMatch = statusLine.match(/HTTP\/[\d.]+\s+(\d+)/);
   const status = statusMatch ? parseInt(statusMatch[1], 10) : 0;
