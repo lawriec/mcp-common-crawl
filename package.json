@@ -1,6 +1,6 @@
 {
   "name": "mcp-common-crawl",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP server for searching and extracting content from Common Crawl web archives",
   "type": "module",
   "main": "build/index.js",
