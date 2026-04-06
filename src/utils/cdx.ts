@@ -3,6 +3,7 @@
  */
 
 import { cdxBaseUrl } from "./crawl-id.js";
+import { fetchWithRetry } from "./fetch-retry.js";
 
 export interface CdxRecord {
   urlkey: string;
@@ -59,7 +60,7 @@ export async function queryCdx(params: CdxSearchParams): Promise<CdxRecord[]> {
   searchParams.set("limit", String(limit));
 
   const url = `${base}?${searchParams.toString()}`;
-  const res = await fetch(url);
+  const res = await fetchWithRetry(url, { timeoutMs: 60_000 });
 
   if (!res.ok) {
     if (res.status === 404) {

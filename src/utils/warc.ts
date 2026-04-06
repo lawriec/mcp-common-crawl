@@ -8,6 +8,7 @@
  */
 
 import { gunzipSync } from "node:zlib";
+import { fetchWithRetry } from "./fetch-retry.js";
 
 const CC_DATA_BASE = "https://data.commoncrawl.org";
 
@@ -39,8 +40,9 @@ export async function fetchWarcRecord(
   const start = Number(offset);
   const end = start + Number(length) - 1;
 
-  const res = await fetch(`${CC_DATA_BASE}/${filename}`, {
+  const res = await fetchWithRetry(`${CC_DATA_BASE}/${filename}`, {
     headers: { Range: `bytes=${start}-${end}` },
+    timeoutMs: 60_000,
   });
 
   if (!res.ok && res.status !== 206) {

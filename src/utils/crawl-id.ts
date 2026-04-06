@@ -2,6 +2,8 @@
  * Resolve crawl IDs and cache the crawl list from Common Crawl.
  */
 
+import { fetchWithRetry } from "./fetch-retry.js";
+
 interface CrawlInfo {
   id: string;
   name: string;
@@ -19,7 +21,9 @@ export async function listCrawls(): Promise<CrawlInfo[]> {
     return crawlCache;
   }
 
-  const res = await fetch("https://index.commoncrawl.org/collinfo.json");
+  const res = await fetchWithRetry("https://index.commoncrawl.org/collinfo.json", {
+    timeoutMs: 30_000,
+  });
   if (!res.ok) {
     throw new Error(`Failed to fetch crawl list: ${res.status} ${res.statusText}`);
   }
