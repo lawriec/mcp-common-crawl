@@ -8,6 +8,13 @@ export interface DomainSummaryArgs {
   crawl?: string;
 }
 
+const PIPELINE_RETRIES = 3;
+const PIPELINE_BACKOFF_MS = 5000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function handleDomainSummary(args: DomainSummaryArgs) {
   if (!args.domain) {
     return {
@@ -21,83 +28,97 @@ export async function handleDomainSummary(args: DomainSummaryArgs) {
     };
   }
 
-  try {
-    const crawlId = await resolveCrawlId(args.crawl);
+  let lastError: Error | undefined;
 
-    // Fetch a larger sample to compute stats
-    const records = await queryCdx({
-      crawlId,
-      domain: args.domain,
-      from: args.from,
-      to: args.to,
-      limit: 1000,
-    });
+  for (let attempt = 0; attempt <= PIPELINE_RETRIES; attempt++) {
+    try {
+      const crawlId = await resolveCrawlId(args.crawl);
 
-    if (records.length === 0) {
+      // Fetch a larger sample to compute stats
+      const records = await queryCdx({
+        crawlId,
+        domain: args.domain,
+        from: args.from,
+        to: args.to,
+        limit: 1000,
+      });
+
+      if (records.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `No captures found for domain ${args.domain} in crawl ${crawlId}`,
+            },
+          ],
+        };
+      }
+
+      // Compute stats
+      const mimeCount: Record<string, number> = {};
+      const statusCount: Record<string, number> = {};
+      let minTimestamp = records[0].timestamp;
+      let maxTimestamp = records[0].timestamp;
+
+      for (const r of records) {
+        mimeCount[r.mime] = (mimeCount[r.mime] ?? 0) + 1;
+        statusCount[r.status] = (statusCount[r.status] ?? 0) + 1;
+        if (r.timestamp < minTimestamp) minTimestamp = r.timestamp;
+        if (r.timestamp > maxTimestamp) maxTimestamp = r.timestamp;
+      }
+
+      // Sort by count descending
+      const topMimes = Object.entries(mimeCount)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10);
+      const topStatuses = Object.entries(statusCount)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5);
+
+      const summary = {
+        domain: args.domain,
+        crawl: crawlId,
+        totalCaptures: records.length,
+        note:
+          records.length === 1000
+            ? "Results capped at 1000 — actual total may be higher"
+            : undefined,
+        dateRange: {
+          earliest: minTimestamp,
+          latest: maxTimestamp,
+        },
+        topMimeTypes: Object.fromEntries(topMimes),
+        topStatusCodes: Object.fromEntries(topStatuses),
+      };
+
       return {
         content: [
           {
             type: "text" as const,
-            text: `No captures found for domain ${args.domain} in crawl ${crawlId}`,
+            text: JSON.stringify(summary, null, 2),
           },
         ],
       };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+
+      if (attempt < PIPELINE_RETRIES) {
+        const waitMs = PIPELINE_BACKOFF_MS * 2 ** attempt;
+        console.error(
+          `[cc_domain_summary] Attempt ${attempt + 1}/${PIPELINE_RETRIES + 1} failed: ${lastError.message} — retrying in ${waitMs}ms`
+        );
+        await sleep(waitMs);
+      }
     }
-
-    // Compute stats
-    const mimeCount: Record<string, number> = {};
-    const statusCount: Record<string, number> = {};
-    let minTimestamp = records[0].timestamp;
-    let maxTimestamp = records[0].timestamp;
-
-    for (const r of records) {
-      mimeCount[r.mime] = (mimeCount[r.mime] ?? 0) + 1;
-      statusCount[r.status] = (statusCount[r.status] ?? 0) + 1;
-      if (r.timestamp < minTimestamp) minTimestamp = r.timestamp;
-      if (r.timestamp > maxTimestamp) maxTimestamp = r.timestamp;
-    }
-
-    // Sort by count descending
-    const topMimes = Object.entries(mimeCount)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10);
-    const topStatuses = Object.entries(statusCount)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5);
-
-    const summary = {
-      domain: args.domain,
-      crawl: crawlId,
-      totalCaptures: records.length,
-      note:
-        records.length === 1000
-          ? "Results capped at 1000 — actual total may be higher"
-          : undefined,
-      dateRange: {
-        earliest: minTimestamp,
-        latest: maxTimestamp,
-      },
-      topMimeTypes: Object.fromEntries(topMimes),
-      topStatusCodes: Object.fromEntries(topStatuses),
-    };
-
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(summary, null, 2),
-        },
-      ],
-    };
-  } catch (error) {
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: `Error getting domain summary: ${error instanceof Error ? error.message : String(error)}`,
-        },
-      ],
-      isError: true,
-    };
   }
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `Error getting domain summary after ${PIPELINE_RETRIES + 1} attempts: ${lastError!.message}`,
+      },
+    ],
+    isError: true,
+  };
 }

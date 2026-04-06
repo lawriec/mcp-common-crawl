@@ -5,13 +5,19 @@
  * and timeouts. Non-retryable errors (4xx except 429) throw immediately.
  */
 
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 10;
 const INITIAL_BACKOFF_MS = 2000;
+const MAX_BACKOFF_MS = 30_000; // Cap at 30s to avoid absurd waits on later attempts
 
 const RETRYABLE_STATUS_CODES = new Set([429, 502, 503, 504]);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Add ±25% jitter to avoid thundering herd on retries */
+function jitter(ms: number): number {
+  return ms * (0.75 + Math.random() * 0.5);
 }
 
 export async function fetchWithRetry(
@@ -39,13 +45,13 @@ export async function fetchWithRetry(
       }
 
       if (RETRYABLE_STATUS_CODES.has(res.status)) {
-        const backoff = INITIAL_BACKOFF_MS * 2 ** attempt;
+        const backoff = jitter(Math.min(INITIAL_BACKOFF_MS * 2 ** attempt, MAX_BACKOFF_MS));
         const retryAfter = res.headers.get("Retry-After");
         const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : backoff;
 
         if (attempt < MAX_RETRIES) {
           console.error(
-            `[fetch-retry] ${res.status} ${res.statusText} for ${url} — retrying in ${waitMs}ms (attempt ${attempt + 1}/${MAX_RETRIES})`
+            `[fetch-retry] ${res.status} ${res.statusText} for ${url} — retrying in ${Math.round(waitMs)}ms (attempt ${attempt + 1}/${MAX_RETRIES})`
           );
           await sleep(waitMs);
           continue;
@@ -58,9 +64,9 @@ export async function fetchWithRetry(
       lastError = err instanceof Error ? err : new Error(String(err));
 
       if (attempt < MAX_RETRIES) {
-        const backoff = INITIAL_BACKOFF_MS * 2 ** attempt;
+        const backoff = jitter(Math.min(INITIAL_BACKOFF_MS * 2 ** attempt, MAX_BACKOFF_MS));
         console.error(
-          `[fetch-retry] ${lastError.message} for ${url} — retrying in ${backoff}ms (attempt ${attempt + 1}/${MAX_RETRIES})`
+          `[fetch-retry] ${lastError.message} for ${url} — retrying in ${Math.round(backoff)}ms (attempt ${attempt + 1}/${MAX_RETRIES})`
         );
         await sleep(backoff);
       }
